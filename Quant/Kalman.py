@@ -10,8 +10,8 @@ def SpreadFit(x,y):
 
     # Initial Parameters
     theta_hat_0 = theta_0
-    Q = np.diag(np.array([1,1])/1e3)  # Process Noise Covariance
-    R = 1e-3
+    Q = np.eye(2) / 1e5  # Process Noise Covariance
+    R = 10
     N = len(x)
     S = np.empty(N)
     theta_hat = np.empty((2,N))
