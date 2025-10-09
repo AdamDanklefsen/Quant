@@ -1,8 +1,11 @@
-def augmented_dickey_fuller_test(S, ):
+import datetime as dt
+
+
+def augmented_dickey_fuller_test(S1, S2):
     import pandas as pd
-    assert isinstance(S, pd.Series)
+    assert isinstance(S1, pd.Series) and isinstance(S2, pd.Series)
     from statsmodels.tsa.stattools import adfuller
-    result = adfuller(S.dropna())
+    result = adfuller(S1.dropna())
     adf_stat = result[0]
     p_value = result[1]
     coint_percentage = 1 - p_value
@@ -31,5 +34,21 @@ def rolling_linear_regression(x,y, period=20):
     return HedgeRatio, intercept
 
 
+def rolling_coint_test(x,y, period=dt.timedelta(days=30), delta=dt.timedelta(days=20)):
+    import pandas as pd
+    import numpy as np
+    from statsmodels.tsa.stattools import coint
+    assert isinstance(x, pd.Series) and isinstance(y, pd.Series)
+    assert isinstance(period, dt.timedelta)
+    assert len(x) == len(y)
 
+    score = pd.Series()
+    pvalue = pd.Series()
+
+    startDay = x.index[0]
+    while startDay < x.index[-1]-period:
+        score[startDay + period], pvalue[startDay + period], _ = coint(x[startDay:startDay + period], y[startDay:startDay + period])
+        startDay += delta
+    coint_percentage = np.sum(pvalue<0.05)/ len(pvalue)
+    return score, pvalue, coint_percentage
 

@@ -1,8 +1,19 @@
 from datetime import datetime
 from Options import trading_days_between
 
+def BS_Implied_Volatility_MultiExpiry(df, now = datetime.now()):
+    import pandas as pd
+    assert isinstance(df, pd.DataFrame)
+    assert 'Strike' in df.columns and 'Price' in df.columns and 'Type' in df.columns and 'Expiry' in df.columns and 'Spot' in df.columns and 'Rate' in df.columns
 
-def BS_Implied_Volatility(df, now = datetime.now()):
+    ExpiryDates = df['Expiry'].unique()
+    for i in range(len(ExpiryDates)):
+        print(f"({i+1}/{len(ExpiryDates)}): Calculating IV for Expiry: {ExpiryDates[i]}")
+        mask = df['Expiry'] == ExpiryDates[i]
+        df.loc[mask, 'Implied Volatility'] = BS_Implied_Volatility_SingleExpiry(df[mask], now)
+    return df['Implied Volatility']
+
+def BS_Implied_Volatility_SingleExpiry(df, now = datetime.now()):
     import numpy as np
     import pandas as pd
     from scipy.stats import norm
@@ -43,6 +54,18 @@ def BS_Implied_Volatility(df, now = datetime.now()):
     VOL = np.clip(VOL, 1e-4, 5)
     return VOL
             
+def fit_IV_slice_MultiExpiry(df, now=datetime.now()):
+    import pandas as pd
+    assert isinstance(df, pd.DataFrame)
+    assert 'Strike' in df.columns and 'Price' in df.columns and 'Type' in df.columns and 'Expiry' in df.columns and 'Spot' in df.columns and 'Rate' in df.columns and 'Implied Volatility' in df.columns
+
+    ExpiryDates = df['Expiry'].unique()
+    results = {}
+    for i in range(len(ExpiryDates)):
+        print(f"({i+1}/{len(ExpiryDates)}): Fitting IV Slice for Expiry: {ExpiryDates[i]}")
+        mask = df['Expiry'] == ExpiryDates[i]
+        results[ExpiryDates[i]] = fit_IV_slice(df[mask], now)
+    return results
 def fit_IV_slice(df, now=datetime.now()):
     import numpy as np
     import pandas as pd
