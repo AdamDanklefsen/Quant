@@ -33,8 +33,17 @@ def rolling_linear_regression(x,y, period=20):
         startDay += delta
     return HedgeRatio, intercept
 
+def coint_test(x,y):
+    import pandas as pd
+    import numpy as np
+    from statsmodels.tsa.stattools import coint
+    assert isinstance(x, pd.Series) and isinstance(y, pd.Series)
+    assert len(x) == len(y)
 
-def rolling_coint_test(x,y, period=dt.timedelta(days=30), delta=dt.timedelta(days=20)):
+    score, pvalue, _ = coint(x, y)
+    return score, pvalue
+
+def rolling_coint_test(x,y, period=dt.timedelta(days=30), delta=dt.timedelta(days=10)):
     import pandas as pd
     import numpy as np
     from statsmodels.tsa.stattools import coint
@@ -49,6 +58,6 @@ def rolling_coint_test(x,y, period=dt.timedelta(days=30), delta=dt.timedelta(day
     while startDay < x.index[-1]-period:
         score[startDay + period], pvalue[startDay + period], _ = coint(x[startDay:startDay + period], y[startDay:startDay + period])
         startDay += delta
-    coint_percentage = np.sum(pvalue<0.05)/ len(pvalue)
+    coint_percentage = np.sum(pvalue<=0.05)/ len(pvalue)
     return score, pvalue, coint_percentage
 
