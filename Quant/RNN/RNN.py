@@ -4,7 +4,7 @@ import Quant.TS_utils as TS
 
 class RNNCell(nn.Module):
     def __init__(self, Nx: int, Nh: int, Ny: int,
-                 kappa: float = 1, signslope: float = 20, tradingcost: float = 0.0001, lambda_var: float = 0.1,
+                 kappa: float = 2, signslope: float = 20, tradingcost: float = 0.0001, lambda_var: float = 0.1,
                  nntype: str = 'RNN', device: str = 'cuda'):
         super(RNNCell, self).__init__()
         self.Nx = Nx
@@ -131,7 +131,9 @@ class RNNCell(nn.Module):
         f = self.forward(x_t)
         # g = self.garch_forward(x_t)
         # w_t = torch.tanh(self.kappa * f / (g + self.epsilon))
-        w_t = torch.tanh(self.kappa * f / .25)  # Using fixed stddev of 0.25 for normalization
+        w_t = torch.tanh(self.kappa * f / .15)  # Using fixed stddev of 0.25 for normalization
+        # zero w_t smoothly unless its magnitude exceeds .1
+        w_t = torch.where(torch.abs(w_t) < .1, torch.zeros_like(w_t), w_t)
         return w_t
     
 
@@ -164,7 +166,7 @@ class RNNCell(nn.Module):
         sharpe = self.compute_ema_sharpe(r_t)
         w_t = self.compute_wt(logret)
 
-        return -sharpe/self.x_t_sharpe - 10000 * (TS.compute_final_cumulative_return_from_log(r_t)/self.x_t_return) + 10 * torch.mean(w_t)**2 + 1000 * torch.mean((torch.abs(w_t)-.3)**2)
+        return -sharpe/self.x_t_sharpe - 10 * (TS.compute_final_cumulative_return_from_log(r_t)/self.x_t_return) + 10 * torch.mean(w_t)**2 # + 1000 * torch.mean((torch.abs(w_t)-.3)**2)
     
     def loss(self, logret: torch.tensor, normlogret: torch.tensor):
         return self.sharpe_meanwt_loss(logret, normlogret)
