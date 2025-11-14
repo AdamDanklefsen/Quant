@@ -25,6 +25,8 @@ def get_all_tickers(cache_file: str = None):
 
     T = yf.Tickers(companies)
     d = T.download(period="1d").iloc[-1]['Close'].T.fillna(value=pd.NA)
+    # print(d)
+    d = d.dropna()
     companies = pd.Series(d.dropna().index)
     # companies = [comp for comp in companies if not d[comp] == np.nan]
         #  or yf.Ticker(comp).info['exchange'] is None or yf.Ticker(comp).info['tradeable'] is False
@@ -50,6 +52,12 @@ def Book_to_Market_Ratio_Multi_Asset(assets: list[str] = None):
     balance_insurance = sf.load_balance_insurance(variant='quarterly', market='us')
     balance_sheet = pd.concat([balance_normal, balance_banks, balance_insurance])
 
+    income_normal = sf.load_income(variant='quarterly', market='us')
+    income_banks = sf.load_income_banks(variant='quarterly', market='us')
+    income_insurance = sf.load_income_insurance(variant='quarterly', market='us')
+    income_sheet = pd.concat([income_normal, income_banks, income_insurance])
+
+
     if assets is not None:
         # assets not in balance sheet
         balance_sheet_assets = balance_sheet.index.get_level_values('Ticker').unique().tolist()
@@ -59,31 +67,29 @@ def Book_to_Market_Ratio_Multi_Asset(assets: list[str] = None):
         assets = [asset for asset in assets if asset in balance_sheet_assets]
         assets = [asset for asset in assets if not asset.endswith('_delisted')]
         balance_sheet = balance_sheet.loc[assets]
+
+
+        income_sheet_assets = income_sheet.index.get_level_values('Ticker').unique().tolist()
+        missing_assets = [asset for asset in assets if asset not in income_sheet_assets]
+        print(f"""Warning: The following {len(missing_assets)} / {len(assets)} assets are missing from the income sheet data and will be skipped: {missing_assets}""")
+        assets = [asset for asset in assets if asset in income_sheet_assets]
+        income_sheet = income_sheet.loc[assets]
     else:
         assets = balance_sheet.index.get_level_values('Ticker').unique().tolist()
 
-    print(len(assets))
-    print(assets)
+
+    print(f"Found Data for {len(assets)} assets.")
 
     yf_ticker = yf.Tickers(' '.join(assets))
-    balance_sheet = balance_sheet[['Publish Date','Restated Date','Shares (Basic)','Total Assets','Total Liabilities', 'Total Equity']]
-    # print(balance_sheet)
+    balance_sheet = balance_sheet[['Fiscal Year','Fiscal Period','Publish Date','Restated Date','Shares (Basic)','Total Assets','Total Liabilities', 'Total Equity']]
     startdate = balance_sheet.index.get_level_values('Report Date').min()
 
-    out = {}
-    Market_Value = pd.DataFrame(0, columns=assets, index=pd.date_range(start=startdate, end=pd.Timestamp.today(), freq='B'))
-    Book_Value = pd.DataFrame(0, columns=assets, index=pd.date_range(start=startdate, end=pd.Timestamp.today(), freq='B'))
+  
     
-    # price_data = pd.DataFrame(0, columns=assets, index=pd.date_range(start=startdate, end=pd.Timestamp.today(), freq='B'))
-    # print(yf_ticker)
-    print('Fetching price data...')
-    price_data = cached_yf_price_data_download(yf_ticker, start_date=startdate, cache_hdf5='../simfin_data/yf_price_cache/price_data.h5')
-    # price_data = yf_ticker.history(start=balance_sheet.index.get_level_values('Report Date')[0])['Close']
-    info = pd.DataFrame(0, columns=assets, index=['industry','sector','bookValue','priceToBook','currentRatio'])
-    # print(price_data.head())
-    # print(price_data)
 
-    simfin_selected_fields = ['Publish Date','Restated Date','Shares (Basic)','Total Assets','Total Liabilities', 'Total Equity']
+    price_data = cached_yf_price_data_download(yf_ticker, start_date=startdate, cache_hdf5='../simfin_data/yf_price_cache/price_data.h5')
+    info = pd.DataFrame(0, columns=assets, index=['industry','sector','bookValue','priceToBook','currentRatio'])
+
     selected_fields = ['Share Issued','Total Assets','Total Liabilities Net Minority Interest','Stockholders Equity']
     info_fields = ['displayName','industry','sector','bookToPrice',
                    'epmcTrailingTwelveMonths', 'profitMargins', 'revenuePerMC', 'freeCashFlowYield', 'EBITDAonEV',
@@ -139,30 +145,110 @@ def Book_to_Market_Ratio_Multi_Asset(assets: list[str] = None):
     ]
 
     bal_yf_full = cached_yf_balance_sheet_download(yf_ticker, cache_hdf5='../simfin_data/yf_balance_cache/balance_sheet.h5')
-
-    # print(bal_yf_full.get(selected_fields))
-    
-    # print("SimFin Balance Sheet Fields:")
-    # print(balance_sheet[simfin_selected_fields])
+    income_yf_full = cached_yf_income_sheet_download(yf_ticker, cache_hdf5='../simfin_data/yf_income_cache/income_sheet.h5')
+    earnings_dates_yf_full = cached_yf_earnings_dates_download(yf_ticker, cache_hdf5='../simfin_data/yf_earnings_dates_cache/earnings_dates.h5')
 
     bal_yf = bal_yf_full.get(selected_fields)
-    bal_yf.columns = ['Shares','Assets','Liabilities','Equity']
-    balance_sheet = balance_sheet.get(simfin_selected_fields)
-    balance_sheet.columns = ['Publish','Restated','Shares','Assets','Liabilities','Equity']
+
+    bal_yf['Fiscal Year'] = pd.Series(bal_yf.index.get_level_values('Report Date').to_period('Y').year.values, index=bal_yf.index)
+    bal_yf['Fiscal Period'] = pd.Series('Q' + bal_yf.index.get_level_values('Report Date').to_period('Q').quarter.astype(str).values, index=bal_yf.index)
+    bal_yf = bal_yf[['Fiscal Year','Fiscal Period','Share Issued','Total Assets','Total Liabilities Net Minority Interest','Stockholders Equity']]
+    bal_yf.columns = ['Fiscal Year','Fiscal Period','Shares','Assets','Liabilities','Equity']
+    balance_sheet.columns = ['Fiscal Year','Fiscal Period','Publish','Restated','Shares','Assets','Liabilities','Equity']
+
 
     bal = pd.concat([balance_sheet, bal_yf])
     bal = bal.dropna(subset=['Shares'])
     bal = bal.loc[~bal.index.duplicated(keep='first')]
     bal = bal.sort_index(level=['Ticker','Report Date'], ascending=[True,True])
-    # print("Combined Balance Sheet Fields:")
-    # print(bal)
+
+    
+
+    
+    # replace missing publish dates in bal with data from earnings_dates_yf_full
+    missing_publish_dates = bal[bal['Publish'].isna()].index
+    earnings_series = earnings_dates_yf_full['Earnings Date']
+    # return 0,0,0,0,0, earnings_series
+    print("Earnings Series:")
+    print(earnings_series)
+    print("Missing Publish Dates:")
+    print(missing_publish_dates)
+    common_missing = missing_publish_dates.intersection(earnings_series.index)
+    print("Common Missing Publish Dates:")
+    print(common_missing)
+    print(f"{len(common_missing)} / {len(missing_publish_dates)} missing publish dates have earnings date data available.")
+    print("Earnings series at missing publish dates:")
+    print(earnings_series.loc[common_missing])
+    print("Duplicate indicies:")
+    print(earnings_series.index[earnings_series.index.duplicated(keep=False)])
+    print("Bal at common missing publish dates before fill:")
+    print(bal.loc[common_missing, 'Publish'])
+    print("Data Compare:")
+    print(pd.concat([bal.loc[common_missing, 'Publish'], earnings_series.loc[common_missing]], axis=1))
+    bal.loc[common_missing, 'Publish'] = earnings_series.loc[common_missing]
+
+    Most_Recent_Quarter_end = pd.Timestamp.today() - pd.offsets.QuarterEnd()
+    print(f"Most Recent Quarter End: {Most_Recent_Quarter_end.date()}")
+    print("Entries in Earnings Series not in Bal:")
+    earnings_not_in_bal = earnings_series.index.difference(bal.index)
+    # earnings_not_in_bal = earnings_not_in_bal[earnings_not_in_bal.get_level_values('Report Date').normalize() != Most_Recent_Quarter_end.normalize()]
+    print(earnings_not_in_bal)
+
+    missing_publish_dates = bal[bal['Publish'].isna()].index
+    print("Missing Publish Dates:")
+    print(missing_publish_dates)
+
+    for ticker in missing_publish_dates.get_level_values('Ticker').unique():
+        # print(f"Processing missing publish dates for {ticker}...")
+        if ticker not in earnings_series.index.get_level_values('Ticker'):
+            # print(f"  No earnings data available for {ticker}, skipping...")
+            continue
+        ticker_missing_dates = missing_publish_dates[missing_publish_dates.get_level_values('Ticker') == ticker].get_level_values('Report Date')
+        ticker_earnings = earnings_series.loc[ticker].index
+        for bal_date in ticker_missing_dates:
+            close_match = ticker_earnings[abs(ticker_earnings - bal_date) <= pd.Timedelta(days=5)]
+            if len(close_match) > 0:
+                print(f"{ticker}: {bal_date} matches {close_match[0]}")
+                # bal.loc[(ticker, bal_date), 'Publish'] = earnings_series.loc[(ticker, close_match[0])]
+                row_data = bal.loc[(ticker, bal_date)].copy()
+                row_data['Publish'] = earnings_series.loc[(ticker, close_match[0])]
+                bal = bal.drop((ticker, bal_date))
+                bal.loc[(ticker, close_match[0])] = row_data
+
+
+
+
+    # print("Filling missing publish dates...")
+    # for idx in bal.loc[missing_publish_dates].index:
+    #     if idx in earnings_dates_yf_full.index:
+    #         print(idx)
+    #         print(earnings_dates_yf_full.loc[idx, 'Earnings Date'])
+    #         # print(f"Filling missing publish date for {idx} with {earnings_dates_yf_full.at[idx, 'Earnings Date']}")
+    #         bal.at[idx, 'Publish'] = earnings_dates_yf_full.loc[idx, 'Earnings Date']
+
+
+    return bal,0,0,0,0, earnings_dates_yf_full
+
+
+    income_yf = income_yf_full.get(['Net Income'])
+    income_yf.columns = ['Net Income']
+    income_sheet = income_sheet.get(['Net Income'])
+    # print(income_sheet)
+    income_sheet.columns = ['Net Income']
+
+    income = pd.concat([income_sheet, income_yf])
+    income = income.dropna(subset=['Net Income'])
+    income = income.loc[~income.index.duplicated(keep='first')]
+    income = income.sort_index(level=['Ticker','Report Date'], ascending=[True,True])
+
 
 
     info = cached_yf_info_download(yf_ticker, info_fields, cache_hdf5='../simfin_data/yf_info_cache/info.h5').T
     info = info.apply(pd.to_numeric, errors='ignore')
+    print(info.columns)
     info = info.loc[info['totalRevenue'] != 0]
 
-    info_out = info[non_numeric_info_fields + raw_features]
+    info_out = info[non_numeric_info_fields + raw_features].copy()
 
     # Inverted Features
     info_out['bookToPrice'] = 1 / info['priceToBook']
@@ -187,14 +273,12 @@ def Book_to_Market_Ratio_Multi_Asset(assets: list[str] = None):
 
     info_out['recommendationMean'] = 5 - info['recommendationMean']
 
-
-
     
     # print(info)
     # print("Info Fields:")
     # print(info.T.columns)
 
-    return bal, price_data, info_out, info
+    return bal, price_data.fillna(method='ffill'), info_out, info, income, earnings_dates_yf_full
 
 
 
@@ -250,9 +334,10 @@ def cached_yf_price_data_download(yf_ticker, start_date, cache_hdf5: str = None)
     import os
     import pandas as pd
     import tables
+    print(f"Fetching price data for {len(yf_ticker.tickers)} tickers...")
 
     tickers_to_fetch = yf_ticker.tickers.keys()
-    price_data = pd.DataFrame(0, columns=yf_ticker.tickers.keys(), index=pd.date_range(start=start_date, end=pd.Timestamp.today(), freq='B'))
+    price_data = pd.DataFrame(0, columns=yf_ticker.tickers.keys(), index=pd.date_range(start=start_date, end=pd.Timestamp.today(), freq='B', tz='US/Eastern'))
 
 
     if cache_hdf5 is not None and os.path.exists(cache_hdf5):
@@ -266,16 +351,16 @@ def cached_yf_price_data_download(yf_ticker, start_date, cache_hdf5: str = None)
             tickers_to_fetch = yf_ticker.tickers.keys()
         else:
             print(f"Loaded price data from cache file {cache_hdf5}.")
-            return price_data
+            return price_data.round(5)
         
     max_width = 40
 
-    cache_dir = './simfin_data/yf_price_cache/'
+    cache_dir = '../simfin_data/yf_price_cache/'
     os.makedirs(cache_dir, exist_ok=True)
     for i, ticker in enumerate(yf_ticker.tickers.keys()):
         filled = int(max_width * i / len(yf_ticker.tickers))
         bar = '#' * filled + '-' * (max_width - filled)
-        print(f"\rProcessing {ticker}: [{bar}] {int(100 * i / len(yf_ticker.tickers))}%", end='', flush=True)
+        print(f"\rProcessing {ticker}: [{bar}] {int(100 * i / len(yf_ticker.tickers))}%  ", end='', flush=True)
 
         cache_file = os.path.join(cache_dir, f'{ticker}_price_data.csv')
 
@@ -287,7 +372,46 @@ def cached_yf_price_data_download(yf_ticker, start_date, cache_hdf5: str = None)
     print("\rProcessing complete.                           ")
 
     price_data.to_hdf(cache_dir + 'price_data.h5', key='price_data', mode='w')
-    return price_data
+    return price_data.round(5)
+
+
+def cached_yf_income_sheet_download(yf_ticker, cache_hdf5: str = None):
+    import os
+    import pandas as pd
+    import tables
+
+    print(f"Fetching income sheet data for {len(yf_ticker.tickers)} tickers...")
+
+    # income_sheet = pd.DataFrame()
+    income_sheet = pd.DataFrame()
+
+    if cache_hdf5 is not None and os.path.exists(cache_hdf5):
+        income_sheet = pd.read_hdf(cache_hdf5, key='income_sheet')
+        print(f"Loaded income sheet data from cache file {cache_hdf5}.")
+        return income_sheet
+    
+    max_width = 40
+    cache_dir = '../simfin_data/yf_income_cache/'
+    os.makedirs(cache_dir, exist_ok=True)
+    for i, ticker in enumerate(yf_ticker.tickers.keys()):
+        filled = int(max_width * i / len(yf_ticker.tickers))
+        bar = '#' * filled + '-' * (max_width - filled)
+        print(f"\rProcessing {ticker}: [{bar}] {int(100 * i / len(yf_ticker.tickers))}%    ", end='', flush=True)
+
+        cache_file = os.path.join(cache_dir, f'{ticker}_income_sheet.csv')
+
+        if os.path.exists(cache_file):
+            inc = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+        else:
+            inc = yf_ticker.tickers[ticker].quarterly_income_stmt.T
+            inc.to_csv(cache_file)
+
+        inc.index = pd.MultiIndex.from_product([[ticker], inc.index], names=['Ticker', 'Report Date'])
+        income_sheet = pd.concat([income_sheet, inc])
+    print("\rProcessing complete.                           ")
+
+    income_sheet.to_hdf(cache_dir + 'income_sheet.h5', key='income_sheet', mode='w')
+    return income_sheet
 
 def cached_yf_balance_sheet_download(yf_ticker, cache_hdf5: str = None):
     import os
@@ -306,7 +430,7 @@ def cached_yf_balance_sheet_download(yf_ticker, cache_hdf5: str = None):
 
     max_width = 40
 
-    cache_dir = './simfin_data/yf_balance_cache/'
+    cache_dir = '../simfin_data/yf_balance_cache/'
     os.makedirs(cache_dir, exist_ok=True)
     for i, ticker in enumerate(yf_ticker.tickers.keys()):
         filled = int(max_width * i / len(yf_ticker.tickers))
@@ -334,6 +458,8 @@ def cached_yf_info_download(yf_ticker, selected_keys, cache_hdf5: str = None):
     import pandas as pd
     import tables
 
+    print(f"Fetching info data for {len(yf_ticker.tickers)} tickers...")
+
     info = pd.DataFrame(0, columns=yf_ticker.tickers.keys(), index=selected_keys)
     if cache_hdf5 is not None and os.path.exists(cache_hdf5):
         info = pd.read_hdf(cache_hdf5, key='info')
@@ -342,7 +468,7 @@ def cached_yf_info_download(yf_ticker, selected_keys, cache_hdf5: str = None):
     
     max_width = 40
 
-    cache_dir = './simfin_data/yf_info_cache/'
+    cache_dir = '../simfin_data/yf_info_cache/'
     os.makedirs(cache_dir, exist_ok=True)
     for i, ticker in enumerate(yf_ticker.tickers.keys()):
         filled = int(max_width * i / len(yf_ticker.tickers))
@@ -361,3 +487,60 @@ def cached_yf_info_download(yf_ticker, selected_keys, cache_hdf5: str = None):
 
     info.to_hdf(cache_dir + 'info.h5', key='info', mode='w')
     return info
+
+# Pass in Tickers object, but need to download by singular ticker objects
+def cached_yf_earnings_dates_download(yf_ticker, cache_hdf5: str = None):
+    import os
+    import pandas as pd
+    import tables
+    import yfinance as yf
+
+    print(f"Fetching earnings dates data for {len(yf_ticker.tickers)} tickers...")
+    from openbb import obb
+
+    earnings_dates = pd.DataFrame()
+    if cache_hdf5 is not None and os.path.exists(cache_hdf5):
+        earnings_dates = pd.read_hdf(cache_hdf5, key='earnings_dates')
+        print(f"Loaded earnings dates data from cache file {cache_hdf5}.")
+        return earnings_dates
+    
+    max_width = 40
+
+    cache_dir = '../simfin_data/yf_earnings_dates_cache/'
+    os.makedirs(cache_dir, exist_ok=True)
+    for i, ticker in enumerate(yf_ticker.tickers.keys()):
+        filled = int(max_width * i / len(yf_ticker.tickers))
+        bar = '#' * filled + '-' * (max_width - filled)
+        print(f"\rProcessing {ticker}: [{bar}] {int(100 * i / len(yf_ticker.tickers))}%   ", end='', flush=True)
+
+        cache_file = os.path.join(cache_dir, f'{ticker}_earnings_dates.csv')
+
+        if os.path.exists(cache_file):
+            DL = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+        else:
+            try:
+                earnings = obb.equity.fundamental.filings(ticker, provider='sec',
+                                                        form_type=["10-Q", "10-K"], limit=6).to_df()
+            except Exception as e:
+                print(f"OpenBB earnings dates fetch failed for {ticker} with error: {e}")
+                continue
+            if 'report_date' not in earnings.columns:
+                print(f"OpenBB earnings dates not found for {ticker}. Skipping.")
+                continue
+            earnings = earnings[['report_date', 'filing_date']]
+            earnings.index = pd.to_datetime(earnings['report_date'])
+            earnings.index.name = 'Report Date'
+            earnings = earnings.drop(columns=['report_date'])
+            earnings.columns = ['Earnings Date']
+            earnings = earnings[~earnings.index.duplicated(keep='last')]
+            DL = earnings
+            DL.to_csv(cache_file)
+
+        DL.index = DL.index.normalize() 
+        DL.index = pd.MultiIndex.from_product([[ticker], DL.index], names=['Ticker', 'Report Date'])
+        earnings_dates = pd.concat([earnings_dates, DL])
+
+    print("\rProcessing complete.                           ")
+
+    earnings_dates.to_hdf(cache_dir + 'earnings_dates.h5', key='earnings_dates', mode='w')
+    return earnings_dates
