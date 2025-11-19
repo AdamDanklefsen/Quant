@@ -98,8 +98,8 @@ class ValueController(nn.Module):
             annualized_return = np.exp(np.sum(pnl_history) * (365 / (dates[-1]-dates[dates.searchsorted(start_date)]).days)) - 1
             annualized_vol = np.std(pnl_history) * np.sqrt(252)
             total_sharpe = annualized_return / (annualized_vol + 1e-6)
-            if epoch % 25 == 0:
-                print(f"Epoch {epoch+1} completed. Total Loss: {total_loss:.6f}, Total Sharpe: {total_sharpe:.6f}, "
+            if epoch % 250 == 0:
+                print(f"Epoch {epoch} completed. Total Loss: {total_loss:.6f}, Total Sharpe: {total_sharpe:.6f}, "
                     f"Total Return: {annualized_return:.6f}, Volatility: {annualized_vol:.6f}, "
                     f"Weights: {self.Wxy.detach().cpu().numpy().T}, Bias: {self.bxy.item():.6f}")
 
@@ -126,7 +126,7 @@ def calcWeights(rets: torch.Tensor) -> torch.Tensor:
     w = cvxpy.Variable(rets.shape[1])
     mu = rets.mean(dim=0).cpu().detach().numpy()
     problem = cvxpy.Problem(
-        cvxpy.Maximize(mu @ w - .01 * cvxpy.quad_form(w, cov)),
+        cvxpy.Maximize(mu @ w - 10 * cvxpy.quad_form(w, cov)),
         [cvxpy.sum(w) == 1, w >= 0]
     )
     problem.solve()
