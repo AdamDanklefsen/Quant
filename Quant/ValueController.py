@@ -32,7 +32,9 @@ class ValueController(nn.Module):
         # [time, tickers, features] * [features, output] -> [time, tickers]
         # print(f"Wxy: {self.Wxy.data}, bxy: {self.bxy.data}")
         # print(f"x: {x}")
-        return torch.tanh(torch.matmul(x, self.Wxy) + self.bxy).squeeze()
+        y = torch.tanh(torch.matmul(x, self.Wxy) + self.bxy).squeeze()
+        return torch.ewm_mean(y, alpha=0.1)
+        # return EWMA(y, alpha=0.1)
     
     def train(self,
               mScore: pd.DataFrame,
@@ -132,3 +134,10 @@ def calcWeights(rets: torch.Tensor) -> torch.Tensor:
     problem.solve()
     weights = torch.tensor(w.value, device=rets.device, dtype=rets.dtype)
     return weights
+
+def EWMA(data: torch.Tensor, alpha: float = 0.1) -> torch.Tensor:
+    ewma = torch.zeros_like(data)
+    ewma[0] = data[0]
+    for t in range(1, data.shape[0]):
+        ewma[t] = alpha * data[t] + (1 - alpha) * ewma[t-1]
+    return ewma
