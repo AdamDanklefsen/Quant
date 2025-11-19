@@ -1,10 +1,160 @@
+def getAlphaVantageOptionsData(startDate = "2020-01-01", nTickers = None):
+    import pandas as pd
+    import time
+    import os
+
+    # AVKEY = "EVECVIOQ5AGUUTK9"
+    AVKEY = os.getenv('AlphaVantage_API_KEY')
+
+    tickers = pd.read_json("./tickers.json").T
+
+    BanList = ['CON', 'BRK-B']
+    TickerList = [
+        # Mega-cap tech (best options liquidity)
+        'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA',
+        
+        # ETFs (most liquid)
+        'SPY', 'QQQ', 'IWM',  # S&P 500, Nasdaq, Russell 2000
+        
+        # High IV / Volatility plays
+        'AMD', 'NFLX', 'PLTR', 'COIN',
+        
+        # Financial
+        'JPM', 'GS', 'BAC',
+        
+        # Consumer / Retail
+        'WMT', 'COST', 'DIS',
+        
+        # Healthcare / Pharma
+        'JNJ', 'UNH',
+        
+        # Energy / Industrials
+        'XOM', 'BA'
+    ]
+    tickers = tickers[tickers['ticker'].isin(TickerList)]
+    print(tickers)
+
+    if nTickers is None:
+        nTickers = len(tickers)
+
+    totalData = pd.DataFrame()
+    QuereiesUsed = 0
+    for ticker in tickers['ticker'].values[:nTickers]:
+        print(f"Fetching data for {ticker}...")
+
+        tData, qT = FetchOptionsData(startDate, ticker, AVKEY)
+        if tData.empty:
+            print(f"No data fetched for {ticker}, skipping...")
+            continue
+        totalData = pd.concat([totalData, tData])
+        QuereiesUsed += qT
+        if QuereiesUsed != 0:
+            print(f"Completed fetching data for {ticker}. Total Queries Used: {QuereiesUsed}")
+        if QuereiesUsed >= 72:
+            print("Reached Alpha Vantage query limit for the minute, Sleeping for 60 seconds...")
+            time.sleep(60)
+            QuereiesUsed = 0
+
+    print(f"Total Queries Used: {QuereiesUsed}")
+
+    # cast all number like columns to numeric
+    for col in totalData.columns:
+        print(f"Column {col} type: {totalData[col].dtype}")
+    return totalData
+
+
+def FetchOptionsData(startDate, ticker, apiKey):
+    # Check if cached file exists
+    import os
+    import pandas as pd
+    import time
+    import shutil
+    
+    # Create ticker folder if it doesn't exist
+    ticker_folder = f"D:/AlphaVantageData/Options/{ticker}"
+    if not os.path.exists(ticker_folder):
+        os.makedirs(ticker_folder)
+    
+    # Create finished folder if it doesn't exist
+    finished_folder = f"D:/AlphaVantageData/OptionsFinished"
+    if not os.path.exists(finished_folder):
+        os.makedirs(finished_folder)
+    
+    if os.path.exists(f"{finished_folder}/{ticker}.csv"):
+        df = pd.read_csv(f"{finished_folder}/{ticker}.csv",
+                         index_col=['contractID', 'date'], parse_dates=['date', 'expiration'])
+        df = df.infer_objects()
+        df = df.reset_index().set_index(['contractID', 'date'])
+        df.index.names = ['contractID', 'date']
+
+        # Delete cache files to save space
+        shutil.rmtree(ticker_folder)
+        return df, 0
+    else:
+        import requests
+        fullOptions = pd.DataFrame()
+        QueryCount = 0
+        start_time = time.time()
+        print(f"Fetching Alpha Vantage data for {ticker}...")
+        for day in pd.date_range(start=startDate, end=pd.Timestamp.today()):
+            if day.day_name() in ['Saturday', 'Sunday']:
+                # print(f"{day.strftime('%Y-%m-%d')} is a weekend, skipping...")
+                continue
+            
+            # Check if day file exists
+            day_str = day.strftime('%Y-%m-%d')
+            day_file = f"{ticker_folder}/{ticker}_{day_str}.csv"
+            if os.path.exists(day_file):
+                options = pd.read_csv(day_file, index_col=['contractID', 'date'], parse_dates=['date', 'expiration'])
+                options = options.infer_objects()
+                options = options.reset_index().set_index(['contractID', 'date'])
+                fullOptions = pd.concat([fullOptions, options])
+                continue
+            
+            # print(f"Fetching options data for {ticker} on {day.strftime('%Y-%m-%d')}...")
+            try:
+                response = requests.get(
+                    f"https://www.alphavantage.co/query?function=HISTORICAL_OPTIONS&symbol={ticker}&date={day_str}&apikey={apiKey}")
+                QueryCount += 1
+                if 'data' not in response.json():
+                    print(f"No options data found for {ticker} on {day_str}: {response.json()}, skipping...")
+                    continue
+                options = pd.DataFrame(response.json()['data'])
+            except Exception as e:
+                print(f"Error fetching options data for {ticker} on {day_str}: {e}, skipping...")
+                continue
+            if len(options) == 0:
+                print(f"No options data found for {ticker} on {day_str} ({day.day_name()}), skipping...")
+                continue
+            options.set_index(['contractID', 'date'], inplace=True)
+            options = options.infer_objects()
+            
+            # Save day file
+            options.to_csv(day_file)
+            fullOptions = pd.concat([fullOptions, options])
+
+            if QueryCount >= 72:
+                elapsed_time = time.time() - start_time
+                start_time = time.time()
+                print(f"Elapsed time for {QueryCount} queries: {elapsed_time:.2f} seconds")
+                print("Reached Alpha Vantage query limit for the minute, Sleeping for 60 seconds...")
+                # progressSleep(60)
+                QueryCount = 0
+
+        fullOptions.to_csv(f"{finished_folder}/{ticker}.csv")
+        return fullOptions, 1
+
+
+
+
+
+
 def FetchTickerData(ticker, apiKey):
     # Check if cached finished file exists
     import os
     import pandas as pd
     
     if os.path.exists(f"../AlphaVantageData/Finished/{ticker}.csv"):
-        # print(f"Reading cached finished file for {ticker}...")
         df = pd.read_csv(f"../AlphaVantageData/Finished/{ticker}.csv",
                             index_col=['Ticker', 'Reported Date'],
                             parse_dates=['Reported Date', 'fiscalDateEnding'])
@@ -18,9 +168,14 @@ def FetchTickerData(ticker, apiKey):
             print(f"No income statement data for {ticker}, skipping...")
             return pd.DataFrame(), qI
         income.index = pd.to_datetime(income.index)
+
         balance, qB = FetchBalanceSheet(ticker, apiKey)
         balance.index = pd.to_datetime(balance.index)
+
         earnings, qE = FetchEarnings(ticker, apiKey)
+        if earnings.empty:
+            print(f"No earnings data for {ticker}, skipping...")
+            return pd.DataFrame(), qI + qB + qE
         earnings.index = pd.to_datetime(earnings.index)
 
         tData = pd.DataFrame(pd.concat([
@@ -75,6 +230,9 @@ def FetchEarnings(ticker, apiKey):
         response = requests.get(
             f"https://www.alphavantage.co/query?function=EARNINGS&symbol={ticker}&apikey={apiKey}")
         earnings = pd.DataFrame(response.json()['quarterlyEarnings'])
+        if len(earnings) == 0:
+            print(f"No Quarterly Earnings found for {ticker}")
+            return pd.DataFrame(), 0
         earnings.set_index('fiscalDateEnding', inplace=True)
         earnings['estimatedEPS'] = pd.to_numeric(earnings['estimatedEPS'], errors='coerce')
         earnings = earnings.infer_objects()
@@ -90,8 +248,6 @@ def FetchIncomeStatement(ticker, apiKey):
         df = pd.read_csv(f"../AlphaVantageData/IncomeStatements/{ticker}.csv", index_col='fiscalDateEnding', parse_dates=True)
         df = df.infer_objects()
         df.index.names = ['fiscalDateEnding']
-        for col in df.columns:
-            print(f"Column {col} type: {df[col].dtype}")
         return df, 0
     else:
         import requests
@@ -103,36 +259,151 @@ def FetchIncomeStatement(ticker, apiKey):
         if 'quarterlyReports' not in response.json():
             print(f"No Quarterly Reports found for {ticker}")
             return pd.DataFrame(), 0
+        if len(response.json()['quarterlyReports']) == 0:
+            print(f"No Quarterly Reports found for {ticker}")
+            return pd.DataFrame(), 0
         income = pd.DataFrame(response.json()['quarterlyReports'])
         income.set_index('fiscalDateEnding', inplace=True)
         income = income.infer_objects()
         income.to_csv(f"../AlphaVantageData/IncomeStatements/{ticker}.csv")
         return income, 1
 
+def FetchShareData(ticker, apiKey):
+    # Check if cached file exists
+    import os
+    import pandas as pd
+    import numpy as np
+
+    if os.path.exists(f"../AlphaVantageData/Shares/{ticker}.csv"):
+        df = pd.read_csv(f"../AlphaVantageData/Shares/{ticker}.csv", index_col=['ticker','date'], parse_dates=['date'])
+        df = df.infer_objects()
+        df.index.names = ['ticker', 'date']
+        return df, 0
+    else:
+        import requests
+
+        response = requests.get(
+            f"https://www.alphavantage.co/query?function=SHARES_OUTSTANDING&symbol={ticker}&apikey={apiKey}&outputsize=full")
+        if response.status_code != 200:
+            raise Exception(f"Error fetching share data for {ticker}: {response.status_code}")
+        if 'data' not in response.json():
+            print(f"No Time Series data found for {ticker}")
+            return pd.DataFrame(), 0
+        if len(response.json()['data']) == 0:
+            print(f"No Time Series data found for {ticker}")
+            return pd.DataFrame(), 0
+        if 'shares_outstanding_diluted' not in response.json()['data'][0]:
+            print(f"No Shares Outstanding Diluted data found for {ticker}")
+            return pd.DataFrame(), 0
+        shares = pd.DataFrame(
+            {
+                'diluted_shares': {
+                    pd.to_datetime(item['date']): int(item['shares_outstanding_diluted']) if item['shares_outstanding_diluted'] is not None else None
+                    for item in response.json()['data']
+                },
+                'basic_shares': {
+                    pd.to_datetime(item['date']): int(item['shares_outstanding_basic']) if item['shares_outstanding_basic'] is not None else None
+                    for item in response.json()['data']
+                }
+            }
+        )
+        shares.index.name = 'date'
+        shares.index = pd.MultiIndex.from_arrays([
+            [ticker]*len(shares), pd.to_datetime(shares.index)], names=['ticker', 'date'])
+        shares = shares.infer_objects()
+
+        # print(shares)
+        # fix outliers
+        Z = (np.log(shares['diluted_shares']) - np.log(shares['diluted_shares']).mean()) / np.log(shares['diluted_shares']).std()
+        # pd.options.display.max_rows = None
+        # print(pd.concat([shares['diluted_shares'], Z], axis=1))
+        for z in Z[Z.abs() > 4].index:
+            print(f"Fixing outlier for {ticker} on {z}")
+            # Scale by power of 10 to place inbetween neighbors
+            if z != shares.index[0] and z != shares.index[-1]:
+                prev_share = shares.loc[shares.index[shares.index.get_loc(z) - 1], 'diluted_shares']
+                next_share = shares.loc[shares.index[shares.index.get_loc(z) + 1], 'diluted_shares']
+                this_share = shares.at[z, 'diluted_shares']
+                if (
+                    not pd.isna(prev_share) and prev_share > 0 and
+                    not pd.isna(next_share) and next_share > 0 and
+                    not pd.isna(this_share) and this_share > 0
+                ):
+                    power = int(np.round(
+                        (np.log10(prev_share) + np.log10(next_share)) / 2 - np.log10(this_share)
+                    ))
+                    # adjust if monotonic and large enough outlier
+                    if abs(power) >= 2 and (prev_share < this_share * (10 ** power) < next_share or next_share < this_share * (10 ** power) < prev_share):
+                        shares.at[z, 'diluted_shares'] = this_share * (10 ** power)
+                        print(f"Power Adjusted shares from {this_share} to {shares.at[z, 'diluted_shares']}")
+                    elif abs(power) < 2:
+                        print(f"Detected small outlier {prev_share} -> {this_share} -> {next_share}, replacing with nan")
+                        shares.at[z, 'diluted_shares'] = np.nan
+                    else:
+                        # try geometric mean
+                        shares.at[z, 'diluted_shares'] = int(np.sqrt(prev_share * next_share))
+                        print(f"GM Adjusted shares from {this_share} to {shares.at[z, 'diluted_shares']}")
+        shares.to_csv(f"../AlphaVantageData/Shares/{ticker}.csv")
+        return shares, 1
 
 def getAlphaVantageData(nTickers = None):
     import pandas as pd
     import time
+    import os
 
+    # AVKEY = "EVECVIOQ5AGUUTK9"
+    AVKEY = os.getenv('AlphaVantage_API_KEY')
 
     tickers = pd.read_json("./tickers.json").T
-    AVKEY = "EVECVIOQ5AGUUTK9"
-    BanList = ['SPY',
-                'QQQ',
-                'UTX',
-                'GLD',
-                'IAU',
-                'GBTC',
-                'FER',
-                'DIA',
-                'MDY']
+    
+    BanList = [
+        # Major ETFs
+        'SPY', 'QQQ', 'DIA', 'MDY', 'GBTC', 'FER',
+        
+        # Commodity/Metal ETFs and Trusts
+        'GLD', 'IAU', 'SLV', 'PHYS', 'PSLV', 'USO',
+        
+        # Government Conservatorship (no public financials)
+        'FNMA', 'FMCC',
+        
+        # Funds/CEFs
+        'PDI', 'CEF',
+        
+        # Problematic/Incomplete Data
+        'UTX', 'QDMI', 'KLAR', 'BULL', 'UELMO', 'ABTC', 'SOBO', 'HAPVD', 'RAL'
+    ]
+    BanList = ['CON']
 
+    tickers = tickers[~((tickers['ticker'].str.len() == 5) & 
+                    (tickers['ticker'].str[-1].isin(['Y', 'F']))) &
+                  ~(tickers['ticker'].isin(BanList)) &
+                  ~tickers['title'].str.contains('ETF|TRUST|FUND|INDEX', case=False, na=False)]
     if nTickers is None:
         nTickers = len(tickers)
 
     totalData = pd.DataFrame()
+    totalShares = pd.DataFrame()
     QuereiesUsed = 0
+
+    if os.path.exists(f"../AlphaVantageData/Finished/FinishedData.h5") and \
+       os.path.exists('../AlphaVantageData/Shares/SharesData.h5'):
+        print("Loading cached data...")
+        totalData = pd.read_hdf('../AlphaVantageData/Finished/FinishedData.h5')
+        totalShares = pd.read_hdf('../AlphaVantageData/Shares/SharesData.h5')
+
+        totalData = totalData.sort_index(level=['Ticker', 'Reported Date'])
+        totalShares = totalShares.sort_index(level=['ticker', 'date'])
+
+        tickers = list(set(totalData.index.get_level_values('Ticker').unique().to_list()) & 
+                       set(totalShares.index.get_level_values('ticker').unique().to_list()))
+        tickers = pd.Series(totalData.index.get_level_values('Ticker').unique().intersection(
+            totalShares.index.get_level_values('ticker').unique()
+        ).to_list())
+        tickers.name = 'ticker'
+        return totalData, totalShares, tickers
+
     for ticker in tickers['ticker'].values[:nTickers]:
+        # print(f"Fetching data for {ticker}...")
 
         if len(ticker) >= 5 and ticker.endswith('Y'):
             print(f"{ticker} looks like an ADR/ETF, skipping...")
@@ -147,24 +418,48 @@ def getAlphaVantageData(nTickers = None):
             print(f"No data fetched for {ticker}, skipping...")
             continue
         totalData = pd.concat([totalData, tData])
-        QuereiesUsed += qT
+
+        tShares, qS = FetchShareData(ticker, AVKEY)
+        if tShares.empty:
+            print(f"No share data fetched for {ticker}, skipping...")
+            continue
+        totalShares = pd.concat([totalShares, tShares])
+        QuereiesUsed += qT + qS
+
+
         if QuereiesUsed != 0:
             print(f"Completed fetching data for {ticker}. Total Queries Used: {QuereiesUsed}")
         if QuereiesUsed >= 72:
             print("Reached Alpha Vantage query limit for the minute, Sleeping for 60 seconds...")
-            time.sleep(60)
+            progressSleep(60)
             QuereiesUsed = 0
     print(f"Total Queries Used: {QuereiesUsed}")
 
     # cast all number like columns to numeric
     for col in totalData.columns:
         print(f"Column {col} type: {totalData[col].dtype}")
-    return totalData
+
+    tickers = list(set(totalData.index.get_level_values('Ticker').unique().to_list()) & 
+                       set(totalShares.index.get_level_values('ticker').unique().to_list()))
+    print(tickers)
+    return totalData, totalShares, tickers
 
 
 
 
-
+def progressSleep(seconds):
+    import time
+    max_width = 40
+    
+    for i in range(seconds, 0, -1):
+        filled = int(max_width * (seconds - i) / seconds)
+        bar = '#' * filled + '-' * (max_width - filled)
+        print(f"\rCooldown: [{bar}] {i}s remaining   ", end='', flush=True)
+        time.sleep(1)
+    
+    # Final message
+    bar = '#' * max_width
+    print(f"\rCooldown: [{bar}] Complete!        ")
 
 def printV(msg, verbose):
     if verbose:

@@ -337,13 +337,12 @@ def cached_yf_price_data_download(yf_ticker, start_date, cache_hdf5: str = None)
     print(f"Fetching price data for {len(yf_ticker.tickers)} tickers...")
 
     tickers_to_fetch = yf_ticker.tickers.keys()
-    price_data = pd.DataFrame(0, columns=yf_ticker.tickers.keys(), index=pd.date_range(start=start_date, end=pd.Timestamp.today(), freq='B', tz='US/Eastern'))
-
+    all_dates = pd.date_range(start=start_date, end=pd.Timestamp.today(), freq='B', tz='US/Eastern')
 
     if cache_hdf5 is not None and os.path.exists(cache_hdf5):
         price_data = pd.read_hdf(cache_hdf5, key='price_data')
 
-        # Check is hdf5 has all items
+        # Check if hdf5 has all items
         missing_tickers = [ticker for ticker in yf_ticker.tickers.keys() if ticker not in price_data.columns]
         if len(missing_tickers) > 0:
             print(f"Cache file {cache_hdf5} is missing tickers: {missing_tickers}. Re-downloading all price data.")
@@ -352,24 +351,32 @@ def cached_yf_price_data_download(yf_ticker, start_date, cache_hdf5: str = None)
         else:
             print(f"Loaded price data from cache file {cache_hdf5}.")
             return price_data.round(5)
-        
-    max_width = 40
 
+    max_width = 40
     cache_dir = '../simfin_data/yf_price_cache/'
     os.makedirs(cache_dir, exist_ok=True)
+
+    # --- Key change: use dict to avoid fragmentation ---
+    data_dict = {}
     for i, ticker in enumerate(yf_ticker.tickers.keys()):
         filled = int(max_width * i / len(yf_ticker.tickers))
         bar = '#' * filled + '-' * (max_width - filled)
         print(f"\rProcessing {ticker}: [{bar}] {int(100 * i / len(yf_ticker.tickers))}%  ", end='', flush=True)
 
         cache_file = os.path.join(cache_dir, f'{ticker}_price_data.csv')
-
         if os.path.exists(cache_file):
-            price_data[ticker] = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            ser = pd.read_csv(cache_file, index_col=0, parse_dates=True, squeeze=True)
         else:
-            price_data[ticker] = yf_ticker.tickers[ticker].history(start=start_date)['Close']
-            price_data[ticker].to_csv(cache_file)
+            ser = yf_ticker.tickers[ticker].history(start=start_date)['Close']
+            ser.to_csv(cache_file)
+        # reindex to ensure alignment with all_dates
+        data_dict[ticker] = ser.reindex(all_dates)
+
     print("\rProcessing complete.                           ")
+
+    # Single concat avoids fragmentation
+    price_data = pd.concat(data_dict, axis=1)
+    price_data.index = all_dates  # ensure consistent index
 
     price_data.to_hdf(cache_dir + 'price_data.h5', key='price_data', mode='w')
     return price_data.round(5)
